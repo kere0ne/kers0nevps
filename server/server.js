@@ -1,433 +1,629 @@
-// Kers0neVPS node API. Real accounts, real containers, real ports.
-// Runs on any Linux VPS: uses Docker when available, falls back to
-// supervised child processes when it is not. Serves the static site too,
-// so the node URL is the full product.
-//
-// Install (Ubuntu/Debian):
-//   curl -fsSL https://get.docker.com | sh        # optional but recommended
-//   git clone https://github.com/kere0ne/kers0nevps /opt/kers0nevps
-//   cd /opt/kers0nevps/server && npm install express multer
-//   PUBLIC_HOST=your.node.ip node server.js       # or a domain behind HTTPS
-//
-// API: accounts at /api (email + scrypt), developer API at /v1 (personal
-// access tokens created in the panel). All responses JSON, all fast.
-
+// Kers0neVPS panel node. Real accounts, real supervised bot processes, real
+// file manager. Implements the full panel API the Kers0ne VPS front end
+// calls. Docker when available, supervised child processes when not.
 const express = require('express');
+const multer = require('multer');
+const os = require('os');
 const { execFile, spawn } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const multer = require('multer');
 
-const DATA = path.join(__dirname, 'data');
-const UPLOADS = path.join(DATA, 'uploads');
-const DB = path.join(DATA, 'db.json');
-fs.mkdirSync(UPLOADS, { recursive: true });
+const PORT = process.env.PORT || 8123;
+const STATIC_DIR = process.env.STATIC_DIR || path.join(__dirname, '..');
+const DATA = process.env.DATA_DIR || path.join(__dirname, 'data');
+const SERVERS_DIR = path.join(DATA, 'servers');
+const UPLOADS_DIR = path.join(DATA, 'uploads');
+const DB_FILE = path.join(DATA, 'db.json');
+fs.mkdirSync(SERVERS_DIR, { recursive: true });
+fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 const PLANS = {
-  mini:  { mem: '512m', cpus: '0.5', label: 'Mini - 512 MB' },
-  basic: { mem: '1g',   cpus: '1',   label: 'Basic - 1 GB' },
-  pro:   { mem: '2g',   cpus: '2',   label: 'Pro - 2 GB' }
+  starter:     { cpu: '1 Core',  memory: '1 GB RAM', storage: '20 GB NVMe',  mem: '512m', cpus: '0.5', label: 'Free Community' },
+  standard:    { cpu: '2 Cores', memory: '2 GB RAM', storage: '40 GB NVMe',  mem: '1g',   cpus: '1',   label: 'Free Bot Host' },
+  performance: { cpu: '4 Cores', memory: '4 GB RAM', storage: '80 GB NVMe',  mem: '2g',   cpus: '2',   label: 'Free High Performance' },
+  ultra:       { cpu: '8 Cores', memory: '8 GB RAM', storage: '160 GB NVMe', mem: '4g',   cpus: '4',   label: 'Free Ultra Dedicated' }
 };
-const IMAGES = { node: 'node:20-alpine', python: 'python:3.12-slim', static: 'nginx:alpine' };
-const ENTRY = { node: 'node index.js', python: 'python main.py', static: 'nginx -g "daemon off;"' };
-const PORT_MIN = 20000, PORT_MAX = 29999;
-const PUBLIC_HOST = process.env.PUBLIC_HOST || '';
+const DISCORD_PY = ['discord.py', 'python-dotenv', 'aiohttp', 'requests', 'psutil', 'colorama', 'asyncpg'];
+const DISCORD_JS = ['discord.js', 'dotenv'];
 
-// ---------- tiny JSON db ----------
+// ---------- tiny json db ----------
 function loadDb() {
-  try { return JSON.parse(fs.readFileSync(DB, 'utf8')); }
-  catch (e) { return { users: [], sessions: [], tokens: [], servers: [] }; }
+  try { return JSON.parse(fs.readFileSync(DB_FILE, 'utf8')); }
+  catch (e) { return { users: [], vps: [] }; }
 }
 function saveDb(db) {
   fs.mkdirSync(DATA, { recursive: true });
-  fs.writeFileSync(DB, JSON.stringify(db, null, 2));
+  fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
 }
-const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
-const hashPassword = (pw, salt) => crypto.scryptSync(pw, salt, 64).toString('hex');
 const rand = (n) => crypto.randomBytes(n).toString('hex');
+const hashPassword = (pw, salt) => crypto.scryptSync(pw, salt, 64).toString('hex');
 
-// ---------- runner: docker or proc ----------
-let RUNNER = 'proc';
-function detectRunner() {
-  return new Promise((resolve) => {
-    execFile('docker', ['info', '--format', 'ok'], (err) => {
-      RUNNER = err ? 'proc' : 'docker';
-      console.log(`[node] runner: ${RUNNER}`);
-      resolve();
-    });
-  });
-}
-const cname = (id) => `kers0nevps-${id}`;
-const vdir = (id) => path.join(DATA, 'servers', id);
-const logf = (id) => path.join(vdir(id), 'app.log');
+// ---------- vps process helpers ----------
+const sdir = (id) => path.join(SERVERS_DIR, id);
+const logFile = (id) => path.join(sdir(id), '.panel-app.log');
 
-function dock(args) {
-  return new Promise((resolve, reject) => {
-    execFile('docker', args, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) return reject(new Error(stderr || err.message));
-      resolve(stdout.trim());
-    });
-  });
-}
-
-// one call returns every container status; keeps list responses quick
-async function dockerStatuses() {
+function vpsAlive(v) {
   try {
-    const out = await dock(['ps', '-a', '--filter', 'name=kers0nevps-', '--format', '{{.Names}}|{{.State}}']);
-    const map = {};
-    for (const line of out.split('\n')) {
-      const [n, s] = line.split('|');
-      if (n) map[n] = s;
-    }
-    return map;
-  } catch (e) { return {}; }
+    const pid = parseInt(fs.readFileSync(path.join(sdir(v.id), 'pid'), 'utf8'), 10);
+    process.kill(pid, 0);
+    return pid;
+  } catch (e) { return 0; }
+}
+function appendLog(id, line) {
+  try { fs.appendFileSync(logFile(id), `[${new Date().toLocaleTimeString()}] ${line}\n`); } catch (e) {}
 }
 
-async function startServer(id, meta) {
-  const dir = vdir(id);
-  if (RUNNER === 'docker') {
-    const limits = PLANS[meta.plan] || PLANS.mini;
-    const args = ['run', '-d', '--name', cname(id),
-      '--restart', 'unless-stopped',
-      '--memory', limits.mem, '--cpus', limits.cpus,
-      '-w', '/bot',
-      '-v', `${dir}:/bot`,
-      '--env-file', path.join(dir, '.env')];
-    if (meta.publicPort) args.push('-p', `${meta.publicPort}:8080`);
-    args.push(IMAGES[meta.runtime] || IMAGES.node, 'sh', '-c', ENTRY[meta.runtime] || ENTRY.node);
-    await dock(['rm', '-f', cname(id)]).catch(() => {});
-    await dock(args);
-    return;
-  }
-  // proc runner: supervised child process, logs to app.log
-  const entry = ENTRY[meta.runtime] || ENTRY.node;
+function spawnBot(v) {
+  const dir = sdir(v.id);
+  const rt = v.bot.runtime || 'python';
+  const fn = v.bot.filename || (rt === 'node' ? 'index.js' : 'bot.py');
+  const cmd = rt === 'node' ? `node ${fn}` : rt === 'bash' ? `bash ${fn}` : `python3 ${fn}`;
   const env = {};
   try {
-    for (const line of fs.readFileSync(path.join(dir, '.env'), 'utf8').split('\n')) {
-      const i = line.indexOf('=');
-      if (i > 0) env[line.slice(0, i)] = line.slice(i + 1);
+    for (const l of fs.readFileSync(path.join(dir, '.env'), 'utf8').split('\n')) {
+      const i = l.indexOf('=');
+      if (i > 0) env[l.slice(0, i).trim()] = l.slice(i + 1).trim();
     }
   } catch (e) {}
-  env.PORT = String(meta.publicPort || 8080);
-  const out = fs.openSync(logf(id), 'a');
-  const child = spawn('sh', ['-c', `exec ${entry}`], {
+  const out = fs.openSync(logFile(v.id), 'a');
+  const child = spawn('sh', ['-c', `exec ${cmd}`], {
     cwd: dir, detached: true, stdio: ['ignore', out, out], env: { ...process.env, ...env }
   });
   child.unref();
   fs.writeFileSync(path.join(dir, 'pid'), String(child.pid));
+  v.bot.pid = child.pid;
+  v.bot.started_at = Date.now();
+  appendLog(v.id, `[24/7 Watchdog] Spawning real process: ${cmd}`);
 }
 
-async function stopServer(id) {
-  if (RUNNER === 'docker') { await dock(['rm', '-f', cname(id)]).catch(() => {}); return; }
+function killBot(v) {
+  const pid = vpsAlive(v);
+  if (pid) {
+    try { process.kill(pid, 'SIGTERM'); } catch (e) {}
+    setTimeout(() => { try { process.kill(pid, 'SIGKILL'); } catch (e) {} }, 2500);
+  }
+  v.bot.pid = null;
+  v.bot.started_at = null;
+  appendLog(v.id, '[panel] Process stopped');
+}
+
+// ---------- background installs (API responses stay quick) ----------
+const jobs = new Set();
+function runInstall(vpsId, kind, args, onDone) {
+  const cmd = kind === 'node' ? 'npm' : 'pip3';
+  const full = kind === 'node' ? ['install', '--no-audit', '--no-fund', ...args] : ['install', '-q', ...args];
+  const key = vpsId + ':' + kind;
+  jobs.add(key);
+  execFile(cmd, full, { cwd: sdir(vpsId), timeout: 300000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+    jobs.delete(key);
+    if (onDone) onDone(err, (stdout || '') + (stderr || ''));
+  });
+}
+
+function autoInstallStack(vpsId, force) {
+  const db = loadDb();
+  const v = db.vps.find((x) => x.id === vpsId);
+  if (!v) return;
+  if (!force && v.packages.auto_install.status === 'done') return;
+  v.packages.auto_install = { status: 'running' };
+  saveDb(db);
+  appendLog(vpsId, '[24/7 Watchdog] Installing Discord stack (discord.py, discord.js, dotenv...)');
+  let remaining = 2, anyErr = false;
+  const done = (err) => {
+    remaining--;
+    if (err) anyErr = true;
+    if (remaining > 0) return;
+    const d2 = loadDb();
+    const v2 = d2.vps.find((x) => x.id === vpsId);
+    if (v2) { v2.packages.auto_install.status = anyErr ? 'failed' : 'done'; saveDb(d2); }
+    appendLog(vpsId, anyErr
+      ? '[24/7 Watchdog] Discord stack finished with issues — retry from Dc Bots'
+      : '[24/7 Watchdog] Discord stack installed [ONLINE]');
+  };
+  runInstall(vpsId, 'python', DISCORD_PY, done);
+  runInstall(vpsId, 'node', DISCORD_JS, done);
+}
+
+function preinstallAndStart(v) {
+  const dir = sdir(v.id);
+  const rt = v.bot.runtime || 'python';
+  const step = () => {
+    if (jobs.has(v.id + ':python') || jobs.has(v.id + ':node')) { setTimeout(step, 2000); return; }
+    const needPy = rt === 'python' && fs.existsSync(path.join(dir, 'requirements.txt'));
+    const needJs = rt === 'node' && fs.existsSync(path.join(dir, 'package.json')) && !fs.existsSync(path.join(dir, 'node_modules'));
+    const go = () => { const d = loadDb(); const v2 = d.vps.find((x) => x.id === v.id); if (v2 && v2.bot.desired) { spawnBot(v2); saveDb(d); } };
+    if (needPy) runInstall(v.id, 'python', ['-r', 'requirements.txt'], go);
+    else if (needJs) runInstall(v.id, 'node', [], go);
+    else go();
+  };
+  step();
+}
+
+// watchdog: keep desired bots alive 24/7
+setInterval(() => {
   try {
-    const pid = parseInt(fs.readFileSync(path.join(vdir(id), 'pid'), 'utf8'), 10);
-    if (pid) process.kill(pid, 'SIGTERM');
-    setTimeout(() => { try { process.kill(pid, 'SIGKILL'); } catch (e) {} }, 3000);
+    const db = loadDb();
+    let changed = false;
+    for (const v of db.vps) {
+      if (v.bot && v.bot.desired && !vpsAlive(v)) {
+        v.bot.respawnCount = (v.bot.respawnCount || 0) + 1;
+        appendLog(v.id, `[24/7 Watchdog] Bot PID inactive, respawning (recovery ${v.bot.respawnCount}) [ONLINE]`);
+        spawnBot(v);
+        changed = true;
+      }
+    }
+    if (changed) saveDb(db);
   } catch (e) {}
-}
+}, 10000);
 
-function serverStatus(id) {
-  if (RUNNER === 'docker') return null; // handled via dockerStatuses batch
-  try {
-    const pid = parseInt(fs.readFileSync(path.join(vdir(id), 'pid'), 'utf8'), 10);
-    process.kill(pid, 0);
-    return 'running';
-  } catch (e) { return 'exited'; }
+// ---------- auth ----------
+function userByKey(k) {
+  k = String(k || '');
+  if (!k) return null;
+  const db = loadDb();
+  return db.users.find((u) => u.api_key === k) || null;
 }
-
-async function fetchLogs(id) {
-  if (RUNNER === 'docker') {
-    try {
-      const out = await dock(['logs', '--tail', '200', cname(id)]);
-      return out.split('\n').slice(-200);
-    } catch (e) { return ['[panel] no logs yet, container not started']; }
-  }
-  try {
-    const lines = fs.readFileSync(logf(id), 'utf8').split('\n');
-    return lines.slice(-200);
-  } catch (e) { return ['[panel] no logs yet, server not started']; }
+function keyFromReq(req) {
+  return req.headers['x-api-key'] || String(req.headers.authorization || '').replace(/^Bearer\s+/i, '') || '';
 }
-
-async function assignPort(db, want) {
-  if (!want) return null;
-  const used = new Set(db.servers.map(s => s.publicPort).filter(Boolean));
-  for (let i = 0; i < 200; i++) {
-    const p = PORT_MIN + Math.floor(Math.random() * (PORT_MAX - PORT_MIN));
-    if (!used.has(p)) return p;
-  }
-  return null;
-}
-
-function recreateEnvFile(id, key, value) {
-  fs.mkdirSync(vdir(id), { recursive: true });
-  const file = path.join(vdir(id), '.env');
-  let lines = [];
-  try { lines = fs.readFileSync(file, 'utf8').split('\n').filter(l => l && !l.startsWith(key + '=')); } catch (e) {}
-  lines.push(`${key}=${value}`);
-  fs.writeFileSync(file, lines.join('\n') + '\n');
+function requireUser(req, res, next) {
+  const u = userByKey(keyFromReq(req));
+  if (!u) return res.status(401).json({ success: false, error: 'Not signed in.' });
+  req.user = u;
+  next();
 }
 
 // ---------- http app ----------
 const app = express();
-app.use(express.json({ limit: '1mb' }));
-
-// GitHub Pages front end calls this node cross-origin; every route except
-// /api/health requires a valid session or token
+app.use(express.json({ limit: '2mb' }));
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, X-API-Key, Content-Type');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
-
-// static site (the node serves the whole product at its own URL)
-app.use(express.static(path.join(__dirname, '..'), { extensions: ['html'] }));
-
-// ---------- auth ----------
-function currentUser(req) {
-  const h = req.headers.authorization || '';
-  if (!h.startsWith('Bearer ')) return null;
-  const db = loadDb();
-  const sess = db.sessions.find(s => s.token === h.slice(7));
-  if (!sess) return null;
-  return db.users.find(u => u.id === sess.userId) || null;
-}
-function requireUser(req, res, next) {
-  const user = currentUser(req);
-  if (!user) return res.status(401).json({ error: 'unauthorized' });
-  req.user = user;
+// never serve panel data, env files or db over http
+app.use((req, res, next) => {
+  const p = req.path;
+  if (p.startsWith('/data') || p === '/tunnel-url.txt' || p === '/tunnel.log' || p === '/.api.pid' || p.startsWith('/.panel')) {
+    return res.status(403).json({ success: false, error: 'forbidden' });
+  }
   next();
-}
-function tokenUser(req) {
-  const h = req.headers.authorization || '';
-  if (!h.startsWith('Bearer kv_')) return null;
-  const db = loadDb();
-  const t = db.tokens.find(x => x.hash === sha256(h.slice(7)));
-  if (!t) return null;
-  t.lastUsed = new Date().toISOString();
-  saveDb(db);
-  return db.users.find(u => u.id === t.userId) || null;
-}
-function requireToken(req, res, next) {
-  const user = tokenUser(req);
-  if (!user) return res.status(401).json({ error: 'invalid token' });
-  req.user = user;
-  next();
-}
+});
 
-app.get('/api/health', (req, res) => res.json({ ok: true, panel: true, runner: RUNNER, uptime: process.uptime() }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', product: 'Kers0neVPS', engine: 'kers0nevps-node', uptime_seconds: Math.floor(process.uptime()) }));
 
-app.post('/api/signup', (req, res) => {
-  const { email, password } = req.body || {};
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'valid email required' });
-  if (!password || password.length < 8) return res.status(400).json({ error: 'password must be at least 8 characters' });
+app.post('/api/register', (req, res) => {
   const db = loadDb();
-  if (db.users.some(u => u.email === email.toLowerCase())) return res.status(409).json({ error: 'an account with that email already exists' });
+  const username = String((req.body || {}).username || '').trim();
+  const password = String((req.body || {}).password || '');
+  if (username.length < 3) return res.json({ success: false, error: 'Username must be at least 3 characters.' });
+  if (password.length < 6) return res.json({ success: false, error: 'Password must be at least 6 characters.' });
+  if (db.users.some((u) => u.username.toLowerCase() === username.toLowerCase())) return res.json({ success: false, error: 'That username is already taken.' });
   const salt = rand(16);
-  const user = { id: 'u_' + rand(8), email: email.toLowerCase(), salt, passHash: hashPassword(password, salt), createdAt: new Date().toISOString() };
+  const user = {
+    id: 'usr_' + rand(8), username,
+    password: { salt, hash: hashPassword(password, salt) },
+    api_key: 'kv_' + rand(24),
+    created_at: new Date().toISOString()
+  };
   db.users.push(user);
-  const token = rand(32);
-  db.sessions.push({ token, userId: user.id, createdAt: new Date().toISOString() });
   saveDb(db);
-  res.json({ token, user: { id: user.id, email: user.email, createdAt: user.createdAt } });
+  res.json({ success: true, api_key: user.api_key, user_id: user.id, username: user.username, created_at: user.created_at });
 });
 
 app.post('/api/login', (req, res) => {
-  const { email, password } = req.body || {};
   const db = loadDb();
-  const user = db.users.find(u => u.email === (email || '').toLowerCase());
-  let ok = false;
-  if (user) {
-    const a = Buffer.from(hashPassword(password || '', user.salt), 'hex');
-    const b = Buffer.from(user.passHash, 'hex');
-    ok = a.length === b.length && crypto.timingSafeEqual(a, b);
+  const username = String((req.body || {}).username || '').trim().toLowerCase();
+  const password = String((req.body || {}).password || '');
+  const user = db.users.find((u) => u.username.toLowerCase() === username);
+  if (!user || hashPassword(password, user.password.salt) !== user.password.hash) {
+    return res.json({ success: false, error: 'Wrong username or password.' });
   }
-  if (!ok) return res.status(401).json({ error: 'wrong email or password' });
-  const token = rand(32);
-  db.sessions.push({ token, userId: user.id, createdAt: new Date().toISOString() });
-  if (db.sessions.length > 500) db.sessions = db.sessions.slice(-200);
-  saveDb(db);
-  res.json({ token, user: { id: user.id, email: user.email, createdAt: user.createdAt } });
+  res.json({ success: true, api_key: user.api_key, user_id: user.id, username: user.username, created_at: user.created_at });
 });
 
-app.post('/api/logout', requireUser, (req, res) => {
-  const db = loadDb();
-  const h = req.headers.authorization || '';
-  db.sessions = db.sessions.filter(s => s.token !== h.slice(7));
-  saveDb(db);
-  res.json({ ok: true });
+app.get('/api/session', (req, res) => {
+  const u = userByKey(keyFromReq(req));
+  res.json(u ? { authenticated: true, user: { id: u.id, username: u.username, api_key: u.api_key, created_at: u.created_at } } : { authenticated: false });
+});
+app.post('/api/session/switch', (req, res) => {
+  const u = userByKey(String((req.body || {}).api_key || ''));
+  if (!u) return res.json({ success: false, error: 'That saved account could not be restored.' });
+  res.json({ success: true, api_key: u.api_key, user_id: u.id, username: u.username });
+});
+app.post('/api/logout', (req, res) => res.json({ success: true }));
+
+app.get('/api/plans', (req, res) => res.json(PLANS));
+
+app.get('/api/hardware', (req, res) => {
+  const cpus = os.cpus();
+  const gb = (b) => (b / 1073741824).toFixed(1) + ' GB';
+  res.json({
+    hardware: {
+      cpu_cores: cpus.length,
+      cpu_model: cpus[0] ? cpus[0].model.trim() : '?',
+      total_memory: gb(os.totalmem()),
+      free_memory: gb(os.freemem()),
+      platform: os.platform() === 'linux' ? 'Linux x64' : os.platform(),
+      kernel: os.release(),
+      uptime_seconds: Math.floor(os.uptime())
+    }
+  });
 });
 
-app.get('/api/me', requireUser, (req, res) => res.json({ user: { id: req.user.id, email: req.user.email, createdAt: req.user.createdAt } }));
+// ---------- vps crud ----------
+function publicVps(v) {
+  const p = PLANS[v.plan] || PLANS.starter;
+  const desired = v.bot && v.bot.desired;
+  const alive = !!vpsAlive(v);
+  return {
+    id: v.id, name: v.name, plan: v.plan, cpu: p.cpu, memory: p.memory, storage: p.storage,
+    ip: v.ip, created_at: v.created_at,
+    status: desired && alive ? 'running' : 'stopped',
+    packages: v.packages
+  };
+}
 
-// ---------- tokens (panel-managed) ----------
-app.get('/api/tokens', requireUser, (req, res) => {
+app.get('/api/vps', requireUser, (req, res) => {
   const db = loadDb();
-  res.json({ tokens: db.tokens.filter(t => t.userId === req.user.id).map(({ id, label, prefix, createdAt, lastUsed }) => ({ id, label, prefix, createdAt, lastUsed })) });
-});
-app.post('/api/tokens', requireUser, (req, res) => {
-  const { label } = req.body || {};
-  if (!label) return res.status(400).json({ error: 'label required' });
-  const db = loadDb();
-  const token = 'kv_' + rand(24);
-  const t = { id: 'tk_' + rand(6), userId: req.user.id, label: label.slice(0, 40), prefix: token.slice(0, 8), hash: sha256(token), createdAt: new Date().toISOString() };
-  db.tokens.push(t);
-  saveDb(db);
-  res.json({ token, id: t.id });
-});
-app.delete('/api/tokens/:id', requireUser, (req, res) => {
-  const db = loadDb();
-  db.tokens = db.tokens.filter(t => !(t.id === req.params.id && t.userId === req.user.id));
-  saveDb(db);
-  res.json({ ok: true });
+  res.json({ success: true, vps: db.vps.filter((v) => v.userId === req.user.id).map(publicVps) });
 });
 
-// ---------- servers core (shared by /api and /v1) ----------
-async function listServers(user, req) {
+app.post('/api/vps', requireUser, (req, res) => {
   const db = loadDb();
-  const mine = db.servers.filter(s => s.userId === user.id);
-  const statuses = RUNNER === 'docker' ? await dockerStatuses() : null;
-  const out = [];
-  for (const meta of mine) {
-    let st = RUNNER === 'docker' ? (statuses[cname(meta.id)] || 'exited') : serverStatus(meta.id);
-    const status = st === 'running' ? 'online' : (st === 'restarting' ? 'crashed' : 'offline');
-    let envKeys = {};
-    try {
-      for (const line of fs.readFileSync(path.join(vdir(meta.id), '.env'), 'utf8').split('\n')) {
-        if (line.includes('=')) envKeys[line.split('=')[0]] = true;
+  const name = String((req.body || {}).name || '').trim().slice(0, 40) || 'server';
+  const plan = PLANS[(req.body || {}).plan] ? (req.body || {}).plan : 'starter';
+  const ipN = 50 + (db.vps.length % 200) + 1;
+  const v = {
+    id: 'vps-' + rand(4), userId: req.user.id, name, plan, ip: `172.20.0.${ipN}`,
+    created_at: new Date().toISOString(),
+    bot: { desired: false, status: 'stopped', running: false, filename: '', runtime: 'python', token_type: 'bot', token: '', pid: null, started_at: null, respawnCount: 0 },
+    packages: {
+      python: DISCORD_PY.map((n) => ({ name: n, version: '', auto: true })),
+      node: DISCORD_JS.map((n) => ({ name: n, version: '', auto: true })),
+      auto_install: { status: 'queued' }
+    }
+  };
+  fs.mkdirSync(sdir(v.id), { recursive: true });
+  db.vps.push(v);
+  saveDb(db);
+  autoInstallStack(v.id, false);
+  res.json({ success: true, vps: publicVps(v), auto_install: { status: 'queued' } });
+});
+
+function findVps(req, res) {
+  const db = loadDb();
+  const v = db.vps.find((x) => x.id === req.params.id && x.userId === req.user.id);
+  if (!v) { res.status(404).json({ success: false, error: 'VPS not found.' }); return null; }
+  return { db, v };
+}
+
+app.post('/api/vps/:id/start', requireUser, (req, res) => {
+  const f = findVps(req, res); if (!f) return;
+  const b = req.body || {};
+  if (b.filename) f.v.bot.filename = String(b.filename).trim();
+  if (b.runtime) f.v.bot.runtime = b.runtime;
+  if (b.token_type) f.v.bot.token_type = b.token_type;
+  if (b.token) f.v.bot.token = String(b.token);
+  if (!f.v.bot.filename) { f.v.bot.filename = f.v.bot.runtime === 'node' ? 'index.js' : 'bot.py'; }
+  if (!fs.existsSync(path.join(sdir(f.v.id), f.v.bot.filename))) {
+    return res.json({ success: false, error: `Script ${f.v.bot.filename} not found. Upload your bot files first.` });
+  }
+  f.v.bot.desired = true;
+  f.v.bot.respawnCount = 0;
+  saveDb(f.db);
+  preinstallAndStart(f.v);
+  res.json({ success: true, message: 'Process started on live host! [ONLINE]', bot_status: 'starting' });
+});
+
+app.post('/api/vps/:id/stop', requireUser, (req, res) => {
+  const f = findVps(req, res); if (!f) return;
+  f.v.bot.desired = false;
+  killBot(f.v);
+  saveDb(f.db);
+  res.json({ success: true, message: 'Process stopped.' });
+});
+
+app.post('/api/vps/:id/restart', requireUser, (req, res) => {
+  const f = findVps(req, res); if (!f) return;
+  const b = req.body || {};
+  if (b.filename) f.v.bot.filename = String(b.filename).trim();
+  if (b.runtime) f.v.bot.runtime = b.runtime;
+  if (b.token) f.v.bot.token = String(b.token);
+  if (b.token_type) f.v.bot.token_type = b.token_type;
+  f.v.bot.desired = true;
+  f.v.bot.respawnCount = 0;
+  killBot(f.v);
+  saveDb(f.db);
+  setTimeout(() => preinstallAndStart(f.v), 1500);
+  res.json({ success: true, message: 'Process restarted. [ONLINE]', bot_status: 'starting' });
+});
+
+app.post('/api/vps/:id/rename', requireUser, (req, res) => {
+  const f = findVps(req, res); if (!f) return;
+  const name = String((req.body || {}).name || '').trim().slice(0, 40);
+  if (!name) return res.json({ success: false, error: 'Enter a name.' });
+  f.v.name = name;
+  saveDb(f.db);
+  res.json({ success: true });
+});
+
+app.delete('/api/vps/:id', requireUser, (req, res) => {
+  const f = findVps(req, res); if (!f) return;
+  f.v.bot.desired = false;
+  killBot(f.v);
+  try { fs.rmSync(sdir(f.v.id), { recursive: true, force: true }); } catch (e) {}
+  f.db.vps = f.db.vps.filter((x) => x.id !== f.v.id);
+  saveDb(f.db);
+  res.json({ success: true });
+});
+
+// ---------- bot ----------
+function startBotRoute(req, res) {
+  const f = findVps(req, res); if (!f) return;
+  const b = req.body || {};
+  if (b.filename) f.v.bot.filename = String(b.filename).trim();
+  if (b.runtime) f.v.bot.runtime = b.runtime;
+  if (b.token_type) f.v.bot.token_type = b.token_type;
+  if (b.token) f.v.bot.token = String(b.token);
+  if (!f.v.bot.filename) { f.v.bot.filename = f.v.bot.runtime === 'node' ? 'index.js' : 'bot.py'; }
+  if (!fs.existsSync(path.join(sdir(f.v.id), f.v.bot.filename))) {
+    return res.json({ success: false, error: `Script ${f.v.bot.filename} not found. Upload your bot files first.` });
+  }
+  f.v.bot.desired = true;
+  f.v.bot.respawnCount = 0;
+  saveDb(f.db);
+  preinstallAndStart(f.v);
+  res.json({ success: true, message: 'Process started on live host! [ONLINE]', bot_status: 'starting' });
+}
+function stopBotRoute(req, res) {
+  const f = findVps(req, res); if (!f) return;
+  f.v.bot.desired = false;
+  killBot(f.v);
+  saveDb(f.db);
+  res.json({ success: true, message: 'Process stopped.' });
+}
+function restartBotRoute(req, res) {
+  const f = findVps(req, res); if (!f) return;
+  const b = req.body || {};
+  if (b.filename) f.v.bot.filename = String(b.filename).trim();
+  if (b.runtime) f.v.bot.runtime = b.runtime;
+  if (b.token) f.v.bot.token = String(b.token);
+  if (b.token_type) f.v.bot.token_type = b.token_type;
+  f.v.bot.desired = true;
+  f.v.bot.respawnCount = 0;
+  killBot(f.v);
+  saveDb(f.db);
+  setTimeout(() => preinstallAndStart(f.v), 1500);
+  res.json({ success: true, message: 'Process restarted. [ONLINE]', bot_status: 'starting' });
+}
+
+app.get('/api/vps/:id/bot', requireUser, (req, res) => {
+  const f = findVps(req, res); if (!f) return;
+  const v = f.v, alive = !!vpsAlive(v);
+  const status = v.bot.desired && alive ? 'running' : v.bot.desired ? 'starting' : 'stopped';
+  res.json({
+    success: true,
+    bot: {
+      status, running: v.bot.desired && alive,
+      uptime_seconds: v.bot.started_at ? Math.floor((Date.now() - v.bot.started_at) / 1000) : 0,
+      filename: v.bot.filename, runtime: v.bot.runtime, token_type: v.bot.token_type,
+      token_saved: !!v.bot.token, pid: v.bot.pid
+    }
+  });
+});
+
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, UPLOADS_DIR),
+    filename: (req, file, cb) => cb(null, Date.now() + '-' + file.originalname.replace(/[^\w.\-]/g, '_'))
+  }),
+  limits: { fileSize: 50 * 1024 * 1024, files: 20 }
+});
+
+function extractZip(zipPath, dest) {
+  return new Promise((resolve) => {
+    execFile('python3', ['-c', 'import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])', zipPath, dest], { timeout: 60000 }, (err) => resolve(!err));
+  });
+}
+
+function detectEntry(dir) {
+  const names = [];
+  const walk = (d, p) => {
+    let items = [];
+    try { items = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { return; }
+    for (const e of items) {
+      if (e.name.startsWith('.') || e.name === 'node_modules') continue;
+      const rel = p ? p + '/' + e.name : e.name;
+      if (e.isDirectory()) walk(path.join(d, e.name), rel);
+      else names.push(rel);
+    }
+  };
+  walk(dir, '');
+  const pick = (c) => c.find((x) => names.includes(x));
+  const js = pick(['index.js', 'bot.js', 'main.js', 'launcher.js']);
+  const py = pick(['main.py', 'bot.py', 'app.py']);
+  if (js && (fs.existsSync(path.join(dir, 'package.json')) || !py)) return { entry: js, runtime: 'node' };
+  if (py) return { entry: py, runtime: 'python' };
+  if (js) return { entry: js, runtime: 'node' };
+  const anyPy = names.find((n) => n.toLowerCase().endsWith('.py'));
+  const anyJs = names.find((n) => n.toLowerCase().endsWith('.js'));
+  if (anyPy) return { entry: anyPy, runtime: 'python' };
+  if (anyJs) return { entry: anyJs, runtime: 'node' };
+  return { entry: '', runtime: '' };
+}
+
+app.post('/api/vps/:id/bot/upload', requireUser, upload.array('files', 20), async (req, res) => {
+  const f = findVps(req, res); if (!f) return;
+  const dir = sdir(f.v.id);
+  const list = req.files || [];
+  let ok = 0;
+  for (const file of list) {
+    const raw = file.originalname.replace(/\\/g, '/').replace(/^\/+/, '');
+    const safe = raw.split('/').filter((s) => s && s !== '..' && s !== '.').join('/');
+    if (!safe) { fs.rmSync(file.path, { force: true }); continue; }
+    if (safe.toLowerCase().endsWith('.zip')) {
+      if (await extractZip(file.path, dir)) ok++;
+    } else {
+      const full = path.join(dir, safe);
+      fs.mkdirSync(path.dirname(full), { recursive: true });
+      fs.copyFileSync(file.path, full);
+      fs.rmSync(file.path, { force: true });
+      ok++;
+    }
+  }
+  if (!ok) return res.json({ success: false, error: 'No usable files in the upload.' });
+  const det = detectEntry(dir);
+  if (det.entry) { f.v.bot.filename = det.entry; f.v.bot.runtime = det.runtime; saveDb(f.db); }
+  appendLog(f.v.id, `[panel] Uploaded ${ok} file(s)${det.entry ? `, entry: ${det.entry} (${det.runtime})` : ''}`);
+  res.json({
+    success: true, message: `Uploaded ${ok} file(s) successfully!`,
+    uploaded: ok, detected_entry: det.entry, detected_runtime: det.runtime
+  });
+});
+
+app.post('/api/vps/:id/bot/start', requireUser, startBotRoute);
+app.post('/api/vps/:id/bot/stop', requireUser, stopBotRoute);
+app.post('/api/vps/:id/bot/restart', requireUser, restartBotRoute);
+
+app.get('/api/vps/:id/bot/logs', requireUser, (req, res) => {
+  const f = findVps(req, res); if (!f) return;
+  const v = f.v, alive = !!vpsAlive(v);
+  let lines = [];
+  try { lines = fs.readFileSync(logFile(v.id), 'utf8').split('\n').filter(Boolean); } catch (e) {}
+  res.json({
+    success: true,
+    logs: lines.slice(-250),
+    status: {
+      status: v.bot.desired && alive ? 'running' : 'stopped',
+      running: v.bot.desired && alive,
+      uptime_seconds: v.bot.started_at ? Math.floor((Date.now() - v.bot.started_at) / 1000) : 0
+    }
+  });
+});
+
+app.post('/api/vps/:id/bot/logs/clear', requireUser, (req, res) => {
+  const f = findVps(req, res); if (!f) return;
+  try { fs.writeFileSync(logFile(f.v.id), ''); } catch (e) {}
+  res.json({ success: true });
+});
+
+// ---------- files ----------
+function safePath(base, rel) {
+  const p = path.normalize(String(rel || '')).replace(/^([.][.](\/|\\|$))+/, '');
+  const full = path.join(base, p);
+  if (!full.startsWith(base)) return null;
+  return full;
+}
+
+app.get('/api/vps/:id/files', requireUser, (req, res) => {
+  const f = findVps(req, res); if (!f) return;
+  const files = [];
+  const skip = new Set(['pid', '.panel-app.log', '.env', 'node_modules']);
+  const walk = (d, p) => {
+    let items = [];
+    try { items = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { return; }
+    for (const e of items) {
+      if (skip.has(e.name)) continue;
+      const rel = p ? p + '/' + e.name : e.name;
+      if (e.isDirectory()) { files.push({ name: rel, isDirectory: true, size: 0 }); walk(path.join(d, e.name), rel); }
+      else { try { files.push({ name: rel, isDirectory: false, size: fs.statSync(path.join(d, e.name)).size }); } catch (err) {} }
+    }
+  };
+  walk(sdir(f.v.id), '');
+  res.json({ success: true, files });
+});
+
+app.get('/api/vps/:id/file', requireUser, (req, res) => {
+  const f = findVps(req, res); if (!f) return;
+  const full = safePath(sdir(f.v.id), req.query.path);
+  if (!full || !fs.existsSync(full) || fs.statSync(full).isDirectory()) return res.json({ success: false, error: 'File not found.' });
+  const st = fs.statSync(full);
+  if (st.size > 512 * 1024) return res.json({ success: false, error: 'File too large to edit (max 512 KB).' });
+  res.json({ success: true, content: fs.readFileSync(full, 'utf8') });
+});
+
+app.post('/api/vps/:id/file', requireUser, (req, res) => {
+  const f = findVps(req, res); if (!f) return;
+  const full = safePath(sdir(f.v.id), (req.body || {}).path);
+  if (!full) return res.json({ success: false, error: 'Bad path.' });
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(full, String((req.body || {}).content ?? ''));
+  res.json({ success: true });
+});
+
+app.post('/api/vps/:id/folder', requireUser, (req, res) => {
+  const f = findVps(req, res); if (!f) return;
+  const full = safePath(sdir(f.v.id), (req.body || {}).path);
+  if (!full) return res.json({ success: false, error: 'Bad path.' });
+  fs.mkdirSync(full, { recursive: true });
+  res.json({ success: true });
+});
+
+app.delete('/api/vps/:id/file', requireUser, (req, res) => {
+  const f = findVps(req, res); if (!f) return;
+  const full = safePath(sdir(f.v.id), req.query.path);
+  if (!full || full === sdir(f.v.id)) return res.json({ success: false, error: 'Bad path.' });
+  fs.rmSync(full, { recursive: true, force: true });
+  res.json({ success: true });
+});
+
+app.get('/api/vps/:id/file/download', (req, res) => {
+  const u = userByKey(req.query.api_key);
+  if (!u) return res.status(401).json({ success: false, error: 'Not signed in.' });
+  const db = loadDb();
+  const v = db.vps.find((x) => x.id === req.params.id && x.userId === u.id);
+  if (!v) return res.status(404).json({ success: false, error: 'VPS not found.' });
+  const full = safePath(sdir(v.id), req.query.path);
+  if (!full || !fs.existsSync(full) || fs.statSync(full).isDirectory()) return res.status(404).json({ success: false, error: 'File not found.' });
+  res.download(full);
+});
+
+// ---------- packages ----------
+app.get('/api/vps/:id/packages/list', requireUser, (req, res) => {
+  const f = findVps(req, res); if (!f) return;
+  res.json({ success: true, python: f.v.packages.python, node: f.v.packages.node, auto_install: f.v.packages.auto_install });
+});
+
+app.post('/api/vps/:id/packages/install', requireUser, (req, res) => {
+  const f = findVps(req, res); if (!f) return;
+  const names = String((req.body || {}).packages || '').trim().split(/\s+/).filter(Boolean);
+  const runtime = (req.body || {}).runtime === 'node' ? 'node' : 'python';
+  if (!names.length) return res.json({ success: false, error: 'Enter a package name.' });
+  const list = runtime === 'node' ? f.v.packages.node : f.v.packages.python;
+  for (const n of names) {
+    const hit = list.find((p) => p.name === n);
+    if (hit) hit.version = 'pending';
+    else list.push({ name: n, version: 'pending', auto: false });
+  }
+  saveDb(f.db);
+  appendLog(f.v.id, `[panel] Installing ${names.join(', ')} (${runtime})...`);
+  runInstall(f.v.id, runtime, names, (err) => {
+    const d2 = loadDb();
+    const v2 = d2.vps.find((x) => x.id === f.v.id);
+    if (v2) {
+      const l2 = runtime === 'node' ? v2.packages.node : v2.packages.python;
+      for (const n of names) {
+        const hit = l2.find((p) => p.name === n);
+        if (hit) hit.version = err ? 'failed' : 'ok';
       }
-    } catch (e) {}
-    const host = PUBLIC_HOST || req.hostname || 'localhost';
-    out.push({ ...meta, status, envKeys, publicUrl: meta.publicPort ? `http://${host}:${meta.publicPort}` : null });
-  }
-  return out;
-}
-
-async function createServer(user, body, req) {
-  const { name, runtime = 'node', plan = 'mini', exposePort = false } = body || {};
-  if (!name) return { error: 'name required' };
-  if (!PLANS[plan]) return { error: 'unknown plan' };
-  const db = loadDb();
-  if (db.servers.filter(s => s.userId === user.id).length >= 20) return { error: 'server limit reached' };
-  const id = 'srv' + rand(5);
-  const dir = vdir(id);
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, '.env'), '');
-  const meta = { id, userId: user.id, name: name.slice(0, 60), runtime: IMAGES[runtime] ? runtime : 'node', plan, createdAt: new Date().toISOString() };
-  meta.publicPort = await assignPort(db, exposePort);
-  db.servers.push(meta);
-  saveDb(db);
-  if (RUNNER === 'docker') {
-    const limits = PLANS[meta.plan];
-    const args = ['create', '--name', cname(id), '--restart', 'unless-stopped',
-      '--memory', limits.mem, '--cpus', limits.cpus, '-w', '/bot',
-      '-v', `${dir}:/bot`, '--env-file', path.join(dir, '.env')];
-    if (meta.publicPort) args.push('-p', `${meta.publicPort}:8080`);
-    args.push(IMAGES[meta.runtime], 'sh', '-c', ENTRY[meta.runtime]);
-    await dock(args).catch(() => {});
-  }
-  return { server: { ...meta, status: 'offline', publicUrl: meta.publicPort ? `http://${PUBLIC_HOST || req.hostname || 'localhost'}:${meta.publicPort}` : null } };
-}
-
-async function serverAction(user, id, type) {
-  const db = loadDb();
-  const meta = db.servers.find(s => s.id === id && s.userId === user.id);
-  if (!meta) return { error: 'not found' };
-  if (!['start', 'stop', 'restart'].includes(type)) return { error: 'unknown action' };
-  if (type === 'stop') await stopServer(id);
-  else await startServer(id, meta);
-  return { action: type, ok: true };
-}
-
-async function deleteServer(user, id) {
-  const db = loadDb();
-  const meta = db.servers.find(s => s.id === id && s.userId === user.id);
-  if (!meta) return { error: 'not found' };
-  await stopServer(id);
-  fs.rmSync(vdir(id), { recursive: true, force: true });
-  db.servers = db.servers.filter(s => s.id !== id);
-  saveDb(db);
-  return { ok: true };
-}
-
-function ownServer(user, id) {
-  const db = loadDb();
-  return db.servers.find(s => s.id === id && s.userId === user.id) || null;
-}
-
-// ---------- panel routes (/api) ----------
-app.get('/api/servers', requireUser, async (req, res) => res.json({ servers: await listServers(req.user, req) }));
-app.post('/api/servers', requireUser, async (req, res) => {
-  const r = await createServer(req.user, req.body, req);
-  if (r.error) return res.status(400).json(r);
-  res.json(r);
-});
-app.post('/api/servers/:id/:action', requireUser, async (req, res) => {
-  const r = await serverAction(req.user, req.params.id, req.params.action);
-  if (r.error) return res.status(400).json(r);
-  res.json(r);
-});
-app.delete('/api/servers/:id', requireUser, async (req, res) => {
-  const r = await deleteServer(req.user, req.params.id);
-  if (r.error) return res.status(404).json(r);
-  res.json(r);
-});
-app.post('/api/servers/:id/env', requireUser, (req, res) => {
-  const { key, value } = req.body || {};
-  if (!key || typeof value !== 'string') return res.status(400).json({ error: 'key and value required' });
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return res.status(400).json({ error: 'invalid key' });
-  if (!ownServer(req.user, req.params.id)) return res.status(404).json({ error: 'not found' });
-  recreateEnvFile(req.params.id, key, value);
-  res.json({ ok: true });
-});
-const upload = multer({ dest: UPLOADS, limits: { fileSize: 100 * 1024 * 1024 } });
-app.post('/api/servers/:id/upload', requireUser, upload.single('file'), async (req, res) => {
-  if (!ownServer(req.user, req.params.id)) return res.status(404).json({ error: 'not found' });
-  const dir = vdir(req.params.id);
-  fs.mkdirSync(dir, { recursive: true });
-  try {
-    await new Promise((resolve, reject) => {
-      execFile('unzip', ['-o', req.file.path, '-d', dir], (err, so, se) => err ? reject(new Error(se || err.message)) : resolve());
-    });
-  } catch (e) { fs.unlinkSync(req.file.path); return res.status(500).json({ error: 'unzip failed: ' + e.message }); }
-  fs.unlinkSync(req.file.path);
-  res.json({ ok: true });
-});
-app.get('/api/servers/:id/logs', requireUser, async (req, res) => {
-  if (!ownServer(req.user, req.params.id)) return res.status(404).json({ error: 'not found' });
-  res.json({ logs: await fetchLogs(req.params.id) });
+      saveDb(d2);
+    }
+    appendLog(f.v.id, err ? `[panel] Install failed: ${names.join(', ')}` : `[panel] Installed ${names.join(', ')} (${runtime})`);
+  });
+  res.json({ success: true, message: `Installing ${names.join(', ')} (${runtime})...` });
 });
 
-// ---------- developer API (/v1, personal access tokens) ----------
-app.get('/v1/account', requireToken, (req, res) => res.json({ account: { id: req.user.id, email: req.user.email, createdAt: req.user.createdAt } }));
-app.get('/v1/servers', requireToken, async (req, res) => res.json({ servers: await listServers(req.user, req) }));
-app.post('/v1/servers', requireToken, async (req, res) => {
-  const r = await createServer(req.user, req.body, req);
-  if (r.error) return res.status(400).json(r);
-  res.status(201).json(r);
-});
-app.get('/v1/servers/:id', requireToken, async (req, res) => {
-  const all = await listServers(req.user, req);
-  const s = all.find(x => x.id === req.params.id);
-  if (!s) return res.status(404).json({ error: 'not found' });
-  res.json({ server: s });
-});
-app.post('/v1/servers/:id/actions', requireToken, async (req, res) => {
-  const r = await serverAction(req.user, req.params.id, (req.body || {}).type);
-  if (r.error) return res.status(400).json(r);
-  res.json(r);
-});
-app.delete('/v1/servers/:id', requireToken, async (req, res) => {
-  const r = await deleteServer(req.user, req.params.id);
-  if (r.error) return res.status(404).json(r);
-  res.json(r);
-});
-app.get('/v1/servers/:id/logs', requireToken, async (req, res) => {
-  if (!ownServer(req.user, req.params.id)) return res.status(404).json({ error: 'not found' });
-  res.json({ logs: await fetchLogs(req.params.id) });
+app.post('/api/vps/:id/packages/auto-install', requireUser, (req, res) => {
+  const f = findVps(req, res); if (!f) return;
+  autoInstallStack(f.v.id, true);
+  res.json({ success: true, message: 'Discord stack install started — watch the logs.' });
 });
 
-const PORT = process.env.PORT || 3000;
-detectRunner().then(() => app.listen(PORT, () => console.log(`Kers0neVPS node API on :${PORT}`)));
+// ---------- static site ----------
+app.use(express.static(STATIC_DIR, { extensions: ['html'] }));
+
+app.listen(PORT, () => console.log(`[node] Kers0neVPS node serving on :${PORT}`));
