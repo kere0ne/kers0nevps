@@ -3,16 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BotNest - Discord bot hosting that just runs</title>
-<meta name="description" content="Deploy your Discord bot on a Docker-isolated VPS node in under a minute. 24/7 uptime, live console, automatic restarts.">
+<title>Kers0neVPS - Discord bot hosting that just runs</title>
+<meta name="description" content="Deploy your Discord bot to a Docker-isolated VPS node in under a minute. Real accounts, live console, automatic restarts.">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 <nav class="nav">
   <div class="container nav-inner">
-    <a href="index.html" class="logo"><span class="logo-mark">BN</span> BotNest</a>
+    <a href="index.html" class="logo"><span class="logo-mark">K0</span> Kers0neVPS</a>
     <div class="nav-links">
       <a href="#features">Features</a>
+      <a href="#network">Network</a>
       <a href="#pricing">Pricing</a>
       <a href="#faq">FAQ</a>
       <a href="dashboard.html" class="btn btn-sm">Open panel</a>
@@ -21,61 +22,74 @@
 </nav>
 
 <header class="hero">
-  <div class="container">
-    <p class="eyebrow">Discord bot VPS hosting</p>
-    <h1>Your bot, running <span class="accent">24/7</span>. No babysitting.</h1>
-    <p class="hero-sub">Push your bot to a Docker-isolated node in under a minute. Crashed? It restarts itself. Need logs? The live console is one click away.</p>
-    <div class="hero-actions">
-      <a href="dashboard.html" class="btn btn-lg">Deploy a bot now</a>
-      <a href="#pricing" class="btn btn-lg btn-ghost">See pricing</a>
+  <div class="container hero-grid">
+    <div>
+      <p class="eyebrow">Discord bot VPS hosting</p>
+      <h1>Your bot, running <span class="accent">24/7</span>.<br>No babysitting.</h1>
+      <p class="hero-sub">Create an account, create a server, upload your bot. Every server is a Docker-isolated container with dedicated resources, automatic restarts, and a live console.</p>
+      <div class="hero-actions">
+        <a href="dashboard.html#signup" class="btn btn-lg">Create your account</a>
+        <a href="#pricing" class="btn btn-lg btn-ghost">See pricing</a>
+      </div>
+      <div class="hero-stats">
+        <div><strong>60s</strong><span>average deploy</span></div>
+        <div><strong>99.9%</strong><span>uptime target</span></div>
+        <div><strong>24/7</strong><span>watchdog coverage</span></div>
+      </div>
     </div>
-    <div class="hero-stats">
-      <div><strong>60s</strong><span>average deploy</span></div>
-      <div><strong>99.9%</strong><span>uptime target</span></div>
-      <div><strong>0</strong><span>commands to remember</span></div>
+    <div class="terminal" aria-hidden="true">
+      <div class="terminal-bar"><span></span><span></span><span></span><em>panel.kers0nevps.com</em></div>
+      <pre><span class="t-cmd">$ kers0nevps create --name luacrypt-bot --runtime python</span>
+<span class="t-ok">  server created  srv-7f3a91  plan plus  node us-east</span>
+<span class="t-cmd">$ kers0nevps upload bot.zip && kers0nevps start</span>
+<span class="t-ok">  uploading bot.zip ... 142 KB ok</span>
+<span class="t-log">  [gateway] shard 0 connected</span>
+<span class="t-log">  [gateway] ready as luacrypt-bot#0405</span>
+<span class="t-ok">  bot online  watchdog armed  restarts: auto</span></pre>
     </div>
   </div>
 </header>
 
 <section id="features" class="section">
   <div class="container">
-    <h2>Everything a bot host should have done years ago</h2>
+    <h2>Built like a real VPS, minus the sysadmin work</h2>
     <div class="grid grid-3">
       <div class="card">
         <h3>Docker isolation</h3>
-        <p>Every bot runs in its own container with dedicated memory and CPU limits. A spam loop in one bot can never starve another.</p>
+        <p>Every server is its own container with hard memory and CPU limits. A crash loop in one bot can never starve another.</p>
       </div>
       <div class="card">
         <h3>Self-healing</h3>
-        <p>Watchdog restarts any bot that crashes or freezes, and containers come back up with the node on reboot. You sleep, they don't.</p>
+        <p>Containers restart on crash and come back with the node on reboot. The watchdog never clocks out.</p>
       </div>
       <div class="card">
         <h3>Live console</h3>
-        <p>Stream stdout and stderr straight from the panel. Restart, stop, or attach to a running bot without ever opening SSH.</p>
+        <p>Stream stdout and stderr straight from the panel. Start, stop, restart, or attach without ever opening SSH.</p>
       </div>
       <div class="card">
         <h3>Secrets stay server-side</h3>
-        <p>Bot tokens and API keys live in server-side environment variables, encrypted at rest, injected at runtime. They never touch the browser or your git history.</p>
+        <p>Bot tokens and API keys are environment variables stored on the host and injected at runtime. They never reach the browser or your git history.</p>
       </div>
       <div class="card">
         <h3>Node and Python</h3>
         <p>discord.js, discord.py, or anything with an entrypoint. Pin a runtime per server, upload a zip, and go.</p>
       </div>
       <div class="card">
-        <h3>Bring your own node</h3>
-        <p>The panel software ships with a self-hosted provisioning API. Point it at any VPS with Docker and the site becomes real hosting.</p>
+        <h3>Your own accounts</h3>
+        <p>Sign up with email and password. Servers, env vars, and console access are scoped to your account only.</p>
       </div>
     </div>
   </div>
 </section>
 
-<section class="section section-alt">
+<section id="network" class="section section-alt">
   <div class="container">
-    <h2>Three steps, done</h2>
+    <h2>Network</h2>
+    <p class="section-sub">The panel runs on Kers0neVPS nodes. Each node provisions containers locally, so deploys stay fast and logs stay live.</p>
     <div class="grid grid-3">
-      <div class="step"><span class="step-num">1</span><h3>Create a server</h3><p>Name it, pick Node or Python, choose a plan.</p></div>
-      <div class="step"><span class="step-num">2</span><h3>Upload your bot</h3><p>Drop in a zip of your project. Env vars are set in the panel.</p></div>
-      <div class="step"><span class="step-num">3</span><h3>Hit start</h3><p>The container boots, the watchdog takes over, your bot comes online.</p></div>
+      <div class="card region"><span class="dot online"></span><h3>US East</h3><p>New York area. Lowest latency to Discord's US gateways.</p></div>
+      <div class="card region"><span class="dot online"></span><h3>Bring your own node</h3><p>Any VPS with Docker becomes a Kers0neVPS node. Run the panel API on it and attach it from the panel.</p></div>
+      <div class="card region"><span class="dot online"></span><h3>DDoS-aware</h3><p>Put the node behind Cloudflare and inbound attacks stop at the edge, not at your bot.</p></div>
     </div>
   </div>
 </section>
@@ -83,43 +97,43 @@
 <section id="pricing" class="section">
   <div class="container">
     <h2>Pricing</h2>
-    <p class="section-sub">Plans are per node. Start small, scale when the member count does.</p>
+    <p class="section-sub">Plans are per server. Start small, scale when the member count does.</p>
     <div class="grid grid-3 pricing">
       <div class="card price-card">
-        <h3>Nest</h3>
+        <h3>Starter</h3>
         <p class="price">$2<span>/mo</span></p>
         <ul>
           <li>512 MB RAM</li>
           <li>50% vCPU</li>
-          <li>1 bot</li>
           <li>2 GB disk</li>
+          <li>Live console</li>
         </ul>
-        <a href="dashboard.html" class="btn">Start with Nest</a>
+        <a href="dashboard.html#signup" class="btn">Start with Starter</a>
       </div>
       <div class="card price-card featured">
         <p class="tag">Most popular</p>
-        <h3>Roost</h3>
+        <h3>Plus</h3>
         <p class="price">$5<span>/mo</span></p>
         <ul>
           <li>1 GB RAM</li>
           <li>100% vCPU</li>
-          <li>3 bots</li>
           <li>5 GB disk</li>
-          <li>Live console + logs</li>
+          <li>Priority restarts</li>
+          <li>Email support</li>
         </ul>
-        <a href="dashboard.html" class="btn">Start with Roost</a>
+        <a href="dashboard.html#signup" class="btn">Start with Plus</a>
       </div>
       <div class="card price-card">
-        <h3>Aviary</h3>
+        <h3>Elite</h3>
         <p class="price">$12<span>/mo</span></p>
         <ul>
           <li>3 GB RAM</li>
           <li>2 vCPU</li>
-          <li>10 bots</li>
           <li>15 GB disk</li>
           <li>Priority restarts</li>
+          <li>Custom runtimes</li>
         </ul>
-        <a href="dashboard.html" class="btn">Start with Aviary</a>
+        <a href="dashboard.html#signup" class="btn">Start with Elite</a>
       </div>
     </div>
   </div>
@@ -130,18 +144,18 @@
     <h2>FAQ</h2>
     <div class="faq">
       <details><summary>What happens when my bot crashes?</summary><p>The watchdog detects the exit and restarts the container automatically. If it crash-loops more than five times in ten minutes, it is stopped and flagged in the panel so you can fix the bug without burning restart cycles.</p></details>
-      <details><summary>Where do my bot tokens live?</summary><p>Server-side only. You set them as environment variables in the panel and they are injected into the container at runtime, stored encrypted on the host. They are never sent to the browser or embedded in your uploaded files.</p></details>
+      <details><summary>Where do my bot tokens live?</summary><p>Server-side only. You set them as environment variables in the panel and they are injected into the container at runtime, stored on the host. They are never sent back to the browser.</p></details>
       <details><summary>Can I run anything besides Discord bots?</summary><p>If it fits in a container and respects your resource limits, yes. Webhooks, APIs, cron jobs, all fair game.</p></details>
-      <details><summary>How is this different from a normal VPS?</summary><p>You get the same isolation and control without managing the OS, firewall, or process manager. The panel handles deployment, logs, and restarts so you only think about your code.</p></details>
-      <details><summary>Do you offer a free trial?</summary><p>Yes, every plan starts with a 7-day trial. No card required to deploy your first server.</p></details>
+      <details><summary>How is this different from a normal VPS?</summary><p>Same isolation and control, without managing the OS, firewall, or process manager. The panel handles deployment, logs, and restarts so you only think about your code.</p></details>
+      <details><summary>Do I get a free trial?</summary><p>Sign up and deploy your first server without a card. Billing is handled per node, outside the panel.</p></details>
     </div>
   </div>
 </section>
 
 <footer class="footer">
   <div class="container footer-inner">
-    <span class="logo"><span class="logo-mark">BN</span> BotNest</span>
-    <span>Built for people who ship bots, not servers.</span>
+    <span class="logo"><span class="logo-mark">K0</span> Kers0neVPS</span>
+    <span><a href="https://github.com/kere0ne/kers0nevps">GitHub</a> · Built for people who ship bots, not servers.</span>
   </div>
 </footer>
 </body>

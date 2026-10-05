@@ -1,9 +1,8 @@
 [Unit]
-Description=BotNest panel API
+Description=Kers0neVPS node API
 After=docker.service network.target
 [Service]
-Environment=ADMIN_TOKEN=CHANGE_ME
-WorkingDirectory=/opt/botnest
+WorkingDirectory=/opt/kers0nevps
 ExecStart=/usr/bin/node server.js
 Restart=always
 RestartSec=5

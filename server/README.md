@@ -1,58 +1,57 @@
-# BotNest panel API
+# Kers0neVPS node API
 
-This is the piece that makes the site real hosting. It runs on a VPS
-(any 1 GB+ box, Ubuntu 22.04 or Debian 12) and manages one Docker
-container per bot server.
+This is the piece that makes the site real. It runs on a VPS (any
+1 GB+ box, Ubuntu 22.04 or Debian 12) and manages one Docker container
+per server, scoped to the account that created it.
+
+## What is real here
+
+- Accounts: signup and login with email and scrypt-hashed passwords,
+  bearer session tokens, per-user server isolation. Stored in
+  `data/db.json` on the node.
+- Servers: real Docker containers with per-plan memory and CPU limits
+  and `--restart unless-stopped` self-healing.
+- Env vars: bot tokens are written to the container's `.env` on the
+  host and injected at runtime. Values are never returned by the API.
+- Logs: streamed from the container via docker logs.
 
 ## Install
 
 ```bash
 curl -fsSL https://get.docker.com | sh
-mkdir -p /opt/botnest && cd /opt/botnest
+mkdir -p /opt/kers0nevps && cd /opt/kers0nevps
 npm init -y && npm install express multer
 # copy server.js here
-openssl rand -hex 32   # this is your ADMIN_TOKEN
-ADMIN_TOKEN=<that value> node server.js
+node server.js
 ```
 
-Keep the whole tree private. Put it behind nginx with HTTPS, or a
-Cloudflare Tunnel, so the API is never exposed on a raw port.
-
-## How it works
-
-- The static dashboard probes `/api/health`. When it answers
-  `{"panel": true}`, the panel switches from demo mode to live mode and
-  every server you create becomes a real Docker container on this node.
-- Each server gets a volume at `data/servers/<id>/`. Upload a zip of
-  your bot there; its entrypoint is `node index.js` or `python main.py`
-  depending on the runtime you picked.
-- Environment variables (bot tokens, database URLs) are stored in a
-  `.env` file on the host, injected at runtime, and never sent back to
-  the browser. This is deliberate: tokens stay server-side.
-- Containers use `--restart unless-stopped`, so a crashed bot or a
-  rebooted node brings itself back up.
+Put it behind nginx with HTTPS or a Cloudflare Tunnel so the API is
+never exposed on a raw port. The GitHub Pages front end talks to it
+cross-origin; CORS is already handled.
 
 ## Run it as a service
 
+See `botnest.service` in this folder (rename to kers0nevps.service):
+
 ```ini
-# /etc/systemd/system/botnest.service
 [Unit]
-Description=BotNest panel API
-After=docker.service
+Description=Kers0neVPS node API
+After=docker.service network.target
 [Service]
-Environment=ADMIN_TOKEN=<your token>
-WorkingDirectory=/opt/botnest
+WorkingDirectory=/opt/kers0nevps
 ExecStart=/usr/bin/node server.js
 Restart=always
+RestartSec=5
 [Install]
 WantedBy=multi-user.target
 ```
 
-`systemctl enable --now botnest`
+`systemctl enable --now kers0nevps`
 
 ## v1 limits
 
-- One node. Multiple nodes need a scheduler in front of the registry.
-- Zip uploads only; a git-pull deploy is the natural v2.
-- No per-customer accounts: the single ADMIN_TOKEN is the panel login.
-  Adding real signups means a user table and per-user server scoping.
+- One node per API instance. Multiple nodes need a scheduler above it.
+- Zip uploads only; git-pull deploys are the natural v2.
+- JSON file storage is fine for a handful of accounts; move to SQLite
+  or Postgres before you have many.
+- Back up `data/db.json`: it holds the account table.
