@@ -1,0 +1,45 @@
+{
+  "users": [
+    {
+      "id": "u_4dd4c440403d5279",
+      "email": "test@kers0nevps.com",
+      "salt": "54024d4e817ca2adcccf522656ee8776",
+      "passHash": "b59925d96767e247a6c8caf069bd4ad08f3cd330867c490f5c768632096ed1e60a5b7710cfb15cf01b60f61f296eaf7e5d057399b6ae486449cce3d5f9940e29",
+      "createdAt": "2026-10-05T06:44:38.059Z"
+    }
+  ],
+  "sessions": [
+    {
+      "token": "2922912c5c472ed98134a1bb80857de25d76d3cadaea370f01a7945b75993e23",
+      "userId": "u_4dd4c440403d5279",
+      "createdAt": "2026-10-05T06:44:38.059Z"
+    },
+    {
+      "token": "b81ea7185db1840010a0845601d2533d58cdece5da0a7c660731ecc4bcfd43a0",
+      "userId": "u_4dd4c440403d5279",
+      "createdAt": "2026-10-05T06:44:38.161Z"
+    }
+  ],
+  "tokens": [
+    {
+      "id": "tk_7a6589c2fec6",
+      "userId": "u_4dd4c440403d5279",
+      "label": "ci",
+      "prefix": "kv_62d4c",
+      "hash": "c9bece720a349ce918d86d54182b852d4879683397f70cbc776c4d1278204600",
+      "createdAt": "2026-10-05T06:44:38.236Z",
+      "lastUsed": "2026-10-05T06:44:38.310Z"
+    }
+  ],
+  "servers": [
+    {
+      "id": "srv35032b1f7a",
+      "userId": "u_4dd4c440403d5279",
+      "name": "smoke-bot",
+      "runtime": "node",
+      "plan": "mini",
+      "createdAt": "2026-10-05T06:44:38.312Z",
+      "publicPort": null
+    }
+  ]
+}

@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kers0neVPS - API documentation</title>
+<link rel="stylesheet" href="styles.css">
+<script src="config.js"></script>
+</head>
+<body>
+<nav class="nav">
+  <div class="container nav-inner">
+    <a href="index.html" class="logo"><span class="logo-mark">K0</span> Kers0neVPS</a>
+    <div class="nav-links">
+      <a href="index.html#features">Features</a>
+      <a href="index.html#plans">Plans</a>
+      <a href="dashboard.html" class="btn btn-sm">Open panel</a>
+    </div>
+  </div>
+</nav>
+
+<main class="container section">
+  <h2>Developer API</h2>
+  <p class="section-sub">Base URL: your node's address, for example <code>https://your-node.example.com</code>. Authenticate every request with a personal access token created in the panel, sent as a bearer header.</p>
+
+  <div class="docs-grid">
+    <div class="card card-wide">
+      <h3>Authentication</h3>
+      <p>Create a token in the panel under API tokens, then send it on every call:</p>
+      <div class="code-block">Authorization: Bearer kv_your_token_here</div>
+    </div>
+
+    <div class="card card-wide">
+      <h3>List servers</h3>
+      <div class="endpoint"><span class="method get">GET</span>/v1/servers</div>
+      <div class="code-block">curl -s https://your-node.example.com/v1/servers \
+  -H "Authorization: Bearer kv_..."
+# { "servers": [ { "id": "srv7f3a91", "name": "luacrypt-bot",
+#     "runtime": "python", "plan": "basic", "status": "online",
+#     "createdAt": "..." } ] }</div>
+    </div>
+
+    <div class="card card-wide">
+      <h3>Create a server</h3>
+      <div class="endpoint"><span class="method post">POST</span>/v1/servers</div>
+      <div class="code-block">curl -s -X POST https://your-node.example.com/v1/servers \
+  -H "Authorization: Bearer kv_..." \
+  -H "Content-Type: application/json" \
+  -d '{"name":"my-bot","runtime":"python","plan":"basic","exposePort":false}'
+# { "server": { "id": "srv7f3a91", "status": "offline" } }
+# runtime: node | python | static    plan: mini | basic | pro</div>
+    </div>
+
+    <div class="card card-wide">
+      <h3>Server actions</h3>
+      <div class="endpoint"><span class="method post">POST</span>/v1/servers/:id/actions</div>
+      <div class="code-block">curl -s -X POST https://your-node.example.com/v1/servers/srv7f3a91/actions \
+  -H "Authorization: Bearer kv_..." \
+  -H "Content-Type: application/json" \
+  -d '{"type":"start"}'
+# type: start | stop | restart   returns { "action": "start", "ok": true }</div>
+    </div>
+
+    <div class="card card-wide">
+      <h3>Logs</h3>
+      <div class="endpoint"><span class="method get">GET</span>/v1/servers/:id/logs</div>
+      <div class="code-block">curl -s https://your-node.example.com/v1/servers/srv7f3a91/logs \
+  -H "Authorization: Bearer kv_..."
+# { "logs": [ "...", "..." ] }   last 200 lines</div>
+    </div>
+
+    <div class="card card-wide">
+      <h3>Terminate a server</h3>
+      <div class="endpoint"><span class="method del">DEL</span>/v1/servers/:id</div>
+      <div class="code-block">curl -s -X DELETE https://your-node.example.com/v1/servers/srv7f3a91 \
+  -H "Authorization: Bearer kv_..."
+# { "ok": true }   container and files are removed permanently</div>
+    </div>
+
+    <div class="card card-wide">
+      <h3>Typical flow</h3>
+      <div class="code-block"># 1. create        POST /v1/servers
+# 2. upload zip     POST /api/servers/:id/upload  (multipart, same token)
+# 3. set secrets    POST /api/servers/:id/env  {"key":"DISCORD_TOKEN","value":"..."}
+# 4. start          POST /v1/servers/:id/actions {"type":"start"}
+# 5. watch          GET  /v1/servers/:id/logs</div>
+    </div>
+  </div>
+</main>
+
+<footer class="footer">
+  <div class="container footer-inner">
+    <span class="logo"><span class="logo-mark">K0</span> Kers0neVPS</span>
+    <span><a href="https://github.com/kere0ne/kers0nevps">GitHub</a></span>
+  </div>
+</footer>
+</body>
+</html>

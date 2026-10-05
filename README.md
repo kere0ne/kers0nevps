@@ -1,26 +1,38 @@
 # Kers0neVPS
 
-A Discord bot hosting platform: landing page + control panel + a node
-API that provisions real Docker containers on a VPS. Accounts are real:
-signup, login, per-user servers.
+Free, enhanced VPS hosting for Discord bots: a Droplets-style marketing
+site, a real control panel with signup and login, and a node API that
+provisions real containers on a VPS. No demo mode anywhere.
 
-- `index.html` - landing page (features, network, pricing, FAQ)
-- `dashboard.html` + `app.js` - control panel. Signup first, then
-  servers, console, env vars, uploads. No demo mode.
-- `server/` - the node API. See server/README.md for setup.
-- `botnest.service` - systemd unit for the API.
+- `index.html` - landing page (features, free plans, API, FAQ)
+- `dashboard.html` + `app.js` - control panel: signup first, servers,
+  console, env vars, public ports, API tokens. No demo mode.
+- `docs.html` - developer API reference (/v1, personal access tokens)
+- `server/` - the node API. See server/README.md.
+- `server/kers0nevps.service` - systemd unit for the node.
 
-## Front end (GitHub Pages)
+## The two surfaces
 
-Pushed to this repo, served from the main branch root at
-`https://kere0ne.github.io/kers0nevps/`. In the panel, set the "Panel
-node" URL once to the HTTPS address of the machine running `server/`;
-it is stored in the browser and every request goes there.
+- GitHub Pages (this repo's Pages site) is the public front: landing,
+  docs, and the panel. The panel talks to whichever node URL you set,
+  stored per browser.
+- The node (any VPS running `server/`) is the real thing: accounts,
+  Docker containers (or supervised processes when Docker is absent),
+  public ports, logs, and the /v1 developer API. The node also serves
+  the whole site itself, so its URL is a complete panel on its own.
 
-## Making hosting real
+## Quick start (real hosting)
 
-1. Rent a VPS, install Docker + Node, copy `server/` up, follow
-   `server/README.md`.
-2. Open the panel, set the panel node URL, sign up, create a server.
-3. Upload a zip of your bot, set its `DISCORD_TOKEN` as an env var,
-   hit start. The container runs 24/7 and restarts itself.
+1. Rent or reuse a VPS (Ubuntu 22.04+), follow `server/README.md`.
+2. Open the panel, paste the node URL in the Node URL field, sign up.
+3. Create a server, upload a zip of your bot, set DISCORD_TOKEN as an
+   env var, hit start. It runs 24/7 and restarts itself.
+
+## Developer API
+
+Full reference in docs.html. Create a token in the panel (API tokens),
+then:
+
+    curl -s https://your-node/v1/servers -H "Authorization: Bearer kv_..."
+
+Create, start, stop, restart, delete, logs. Same API the panel uses.
