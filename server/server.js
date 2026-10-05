@@ -91,14 +91,22 @@ function killBot(v) {
 // ---------- background installs (API responses stay quick) ----------
 const jobs = new Set();
 function runInstall(vpsId, kind, args, onDone) {
-  const cmd = kind === 'node' ? 'npm' : 'pip3';
-  const full = kind === 'node' ? ['install', '--no-audit', '--no-fund', ...args] : ['install', '-q', ...args];
   const key = vpsId + ':' + kind;
   jobs.add(key);
-  execFile(cmd, full, { cwd: sdir(vpsId), timeout: 300000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+  const finish = (err, out) => {
     jobs.delete(key);
-    if (onDone) onDone(err, (stdout || '') + (stderr || ''));
-  });
+    if (err) appendLog(vpsId, '[panel] ' + kind + ' install issue: ' + String(err.message || err).slice(0, 180) + ' | ' + String(out || '').slice(-200).replace(/\n/g, ' '));
+    if (onDone) onDone(err, out);
+  };
+  if (kind === 'node') {
+    execFile('npm', ['install', '--no-audit', '--no-fund', ...args], { cwd: sdir(vpsId), timeout: 300000, maxBuffer: 4 * 1024 * 1024 }, finish);
+  } else {
+    // python3 -m pip first, then --break-system-packages for PEP 668 system pythons
+    const pkgs = args.join(' ');
+    execFile('sh', ['-c',
+      'python3 -m pip install -q ' + pkgs + ' 2>&1 || python3 -m pip install -q --break-system-packages ' + pkgs + ' 2>&1 || pip3 install -q ' + pkgs + ' 2>&1'
+    ], { cwd: sdir(vpsId), timeout: 300000, maxBuffer: 4 * 1024 * 1024 }, finish);
+  }
 }
 
 function autoInstallStack(vpsId, force) {
@@ -109,16 +117,17 @@ function autoInstallStack(vpsId, force) {
   v.packages.auto_install = { status: 'running' };
   saveDb(db);
   appendLog(vpsId, '[24/7 Watchdog] Installing Discord stack (discord.py, discord.js, dotenv...)');
-  let remaining = 2, anyErr = false;
-  const done = (err) => {
+  let remaining = 2, okCount = 0;
+  const done = (err, out) => {
     remaining--;
-    if (err) anyErr = true;
+    if (!err && !/externally-managed|No such file|not found|EACCES|EXC/i.test(String(out || '').slice(-300))) okCount++;
     if (remaining > 0) return;
     const d2 = loadDb();
     const v2 = d2.vps.find((x) => x.id === vpsId);
-    if (v2) { v2.packages.auto_install.status = anyErr ? 'failed' : 'done'; saveDb(d2); }
-    appendLog(vpsId, anyErr
-      ? '[24/7 Watchdog] Discord stack finished with issues — retry from Dc Bots'
+    const failed = okCount === 0;
+    if (v2) { v2.packages.auto_install.status = failed ? 'failed' : 'done'; saveDb(d2); }
+    appendLog(vpsId, failed
+      ? '[24/7 Watchdog] Discord stack install failed — press Install Discord Stack to retry'
       : '[24/7 Watchdog] Discord stack installed [ONLINE]');
   };
   runInstall(vpsId, 'python', DISCORD_PY, done);
@@ -194,6 +203,28 @@ app.use((req, res, next) => {
 });
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', product: 'Kers0neVPS', engine: 'kers0nevps-node', uptime_seconds: Math.floor(process.uptime()) }));
+
+const netCache = new Map();
+app.get('/api/netinfo', (req, res) => {
+  let ip = String(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+  if (ip.startsWith('::ffff:')) ip = ip.slice(7);
+  const hit = netCache.get(ip);
+  if (hit && Date.now() - hit.t < 600000) return res.json({ success: true, ...hit.v });
+  const url = 'http://ip-api.com/json/' + encodeURIComponent(ip) + '?fields=status,country,countryCode,isp,org,proxy,hosting,mobile,query';
+  const req2 = require('http').get(url, { timeout: 6000 }, (r2) => {
+    let d = '';
+    r2.on('data', (c) => (d += c));
+    r2.on('end', () => {
+      let v = { ip, country: '', isp: '', proxy: false, hosting: false, mobile: false };
+      try { const j = JSON.parse(d); if (j.status === 'success') v = { ip: j.query || ip, country: j.countryCode || '', isp: j.isp || j.org || '', proxy: !!j.proxy, hosting: !!j.hosting, mobile: !!j.mobile }; } catch (e) {}
+      netCache.set(ip, { t: Date.now(), v });
+      if (netCache.size > 500) netCache.clear();
+      res.json({ success: true, ...v });
+    });
+  });
+  req2.on('error', () => res.json({ success: false, ip }));
+  req2.on('timeout', () => { req2.destroy(); res.json({ success: false, ip }); });
+});
 
 app.post('/api/register', (req, res) => {
   const db = loadDb();
