@@ -1,0 +1,11 @@
+[Unit]
+Description=BotNest panel API
+After=docker.service network.target
+[Service]
+Environment=ADMIN_TOKEN=CHANGE_ME
+WorkingDirectory=/opt/botnest
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
